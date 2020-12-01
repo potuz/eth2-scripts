@@ -207,7 +207,7 @@ def get_peers(testnet):
     peers = peerlist["peers"]
     return peers
  
-def print_block(block):
+def print_block(block, prev, down):
     slot = int(block["slot"])
     epoch = slot / 32
     proposer = int(block["proposerIndex"])
@@ -219,11 +219,23 @@ def print_block(block):
     exits = len(body["voluntaryExits"])
     proposerSlashings = len(body["proposerSlashings"])
     attesterSlashings = len(body["attesterSlashings"])
+    if down:
+        while (prev > 0) and prev > (slot + 1):
+            prev -= 1
+            print("%8d%10d     \033[93mMISSING\033[0m" % (prev/32, prev))
+    else:
+        if slot < prev:
+            return
+        while (prev > 0) and prev < (slot - 1):
+            prev += 1
+            print("%8d%10d     \033[93mMISSING\033[0m" % (prev/32, prev))
+
     print("%8d%10d%10s%8d%5d%3d/%-3d%5d%20s" % (epoch, slot, proposer,
                                                 attestations, deposits,
                                                 proposerSlashings,
                                                 attesterSlashings,
                                                 exits,  graffiti))
+    return slot
 
 
 def print_epoch_blocks(epoch, testnet, rows):
@@ -241,9 +253,10 @@ def print_epoch_blocks(epoch, testnet, rows):
     containers.reverse()
 
     i = rows
-    for c in containers :
+    slot=0
+    for c in containers:
         block = c["block"]["block"]
-        print_block(block)
+        slot = print_block(block, slot, True)
         i -= 1
         if i == 0:
             break
@@ -257,12 +270,13 @@ def stream_blocks(args):
 
     #Get this epoch's blocks
     req = requests.get(base_url+port+endpoint_prefix+stream_blocks_endpoint, stream=True)
+    slot = 0
     for line in req.iter_lines():
         if line:
             decoded_line = line.decode('utf-8')
             json_line = json.loads(decoded_line)
             block = json_line['result']['block']
-            print_block(block)
+            slot = print_block(block, slot, False)
      
 def log_beacon(args):
     if args.testnet:
@@ -332,10 +346,10 @@ def log_beacon(args):
             epoch = int(chainhead['headEpoch'])
             
             print("   Epoch      Slot  Proposer     Att  Dep Slsh           Graffiti") 
-            ret = print_epoch_blocks(epoch, args.testnet, args.rows)
-            if ret > 0:
-                print_epoch_blocks(epoch-1, args.testnet, ret)
-
+            ret = args.rows
+            while ret:
+                ret = print_epoch_blocks(epoch, args.testnet, ret)
+                epoch -= 1
             return
         
 def log_geth(args):
