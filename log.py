@@ -82,17 +82,48 @@ def log_validator(args):
     j.log_level(journal.LOG_INFO)
     j.add_match(_SYSTEMD_UNIT=service)
 
+    if args.subcommand == "proposals":
+        j.add_match(MESSAGE="Submitted new block")
+        j.seek_tail()
+        print("  Time      Slot     Root         Atts   Deps      Graffiti")
+        j.seek_tail()
+        i = 0
+        while i < args.rows:
+            msg = j.get_previous()
+            if not msg:
+                i += 1
+                continue
+            slot = int(msg['SLOT'])
+            if args.epoch and slot > args.epoch * 32:
+                continue
+            root = msg['BLOCKROOT']
+            atts = msg['NUMATTESTATIONS']
+            deps = msg['NUMDEPOSITS']
+            graffiti_temp = base64.b64decode(body["graffiti"])
+            graffiti = graffiti_temp.decode('utf8').replace("\00", " ")
+            datetime = msg['_SOURCE_REALTIME_TIMESTAMP']
+            time = datetime.strftime("%H:%M:%S")
+            print("{}   {:>7}   {}       {}  {}     {}".format(time, slot, root,
+                                                        atts, deps, graffiti))
+
+            i += 1
+
     if args.subcommand == "attestations":
         j.add_match(MESSAGE="Submitted new attestations")
         j.seek_tail()
         print("  time      source   target     slot    index  agr  committee      sourceroot       targetroot       beaconroot")
-        for i in range(args.rows):
+        i = 0
+        while i < args.rows:
             msg = j.get_previous()
             if not msg:
+                i += 1
                 continue
+            slot = int(msg['SLOT'])
+            if args.epoch and slot > args.epoch * 32:
+                continue
+
             aggidx = [int(m) for m in msg["AGGREGATORINDICES"][1:-1].split()]
             attidx = [int(m) for m in msg["ATTESTERINDICES"][1:-1].split()]
-            slot = int(msg['SLOT'])
             source = int(msg['SOURCEEPOCH'])
             target = int(msg['TARGETEPOCH'])
             commitee = int(msg['COMMITTEEINDEX'])
@@ -110,6 +141,7 @@ def log_validator(args):
                     print("{} {:>8} {:>8} {:>9} {:>8}     {:>8}       {}   {}   {}".format(
                           time, source, target, slot, idx, commitee, sourceroot,
                           targetroot, beaconroot))
+            i += 1
 
     if args.subcommand == "performance":
         j.add_match(MESSAGE="Previous epoch voting summary")
@@ -119,6 +151,7 @@ def log_validator(args):
         while i < args.rows:
             msg = j.get_previous()
             if not msg:
+                i += 1
                 continue
             epoch = int(msg['EPOCH'])
             if args.epoch and epoch > args.epoch:
@@ -379,12 +412,18 @@ def main(argv):
     parser_validator = subparsers.add_parser("validator", help='Logs from the validator client')
     parser_validator.set_defaults(func=log_validator)
     subparser_val = parser_validator.add_subparsers(required=True, metavar="SUBCOMMAND", dest="subcommand")
-    subparser_val.add_parser("attestations", help="Info from last attestations")
+    atts_parser = subparser_val.add_parser("attestations", help="Info from submitted attestations")
+    atts_parser.add_argument('-e', '--epoch', type=int, default=0, 
+                                help="report attestations starting from the given epoch (default: latest head")
+
     performance_parser = subparser_val.add_parser("performance", help="Performance of last few epochs")
     performance_parser.add_argument('-e', '--epoch', type=int, default=0, 
                                 help="report performance starting from the given epoch (default: latest head")
 
+    proposals_parser = subparser_val.add_parser("proposals", help="Info from submitted proposals")
     subparser_val.add_parser("status", help="Satus overview of the validator")
+    proposals_parser.add_argument('-e', '--epoch', type=int, default=0, 
+                                help="report proposals starting from the given epoch (default: latest head")
 
 
     #The beacon command arguments
