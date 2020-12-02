@@ -115,9 +115,13 @@ def log_validator(args):
         j.add_match(MESSAGE="Previous epoch voting summary")
         j.seek_tail() 
         print("   time      pubkey           epoch    source  target  head   inc. dist.")
-        for i in range(args.rows):
+        i = 0
+        while i < args.rows:
             msg = j.get_previous()
             if not msg:
+                continue
+            epoch = int(msg['EPOCH'])
+            if args.epoch and epoch > args.epoch:
                 continue
             inclusion = int(msg['INCLUSIONDISTANCE'])
             if msg['CORRECTLYVOTEDSOURCE'] == "true":
@@ -133,7 +137,6 @@ def log_validator(args):
             else:
                 head = "⨯"
             pubkey = msg['PUBKEY']
-            epoch = int(msg['EPOCH'])
             datetime = msg['_SOURCE_REALTIME_TIMESTAMP']
             time = datetime.strftime("%H:%M:%S")
             if inclusion < 33:
@@ -142,6 +145,7 @@ def log_validator(args):
             else:
                 print("{}   {}  {:>8}     {:^5}   {:^5}  {:^5} {:>5}".format(
                       time, pubkey, epoch, source, target, head, "miss"))
+            i += 1
 
     if args.subcommand == "status":
         print("Validator summary since last launch:\n")
@@ -376,8 +380,12 @@ def main(argv):
     parser_validator.set_defaults(func=log_validator)
     subparser_val = parser_validator.add_subparsers(required=True, metavar="SUBCOMMAND", dest="subcommand")
     subparser_val.add_parser("attestations", help="Info from last attestations")
-    subparser_val.add_parser("performance", help="Performance of last few epochs")
+    performance_parser = subparser_val.add_parser("performance", help="Performance of last few epochs")
+    performance_parser.add_argument('-e', '--epoch', type=int, default=0, 
+                                help="report performance starting from the given epoch (default: latest head")
+
     subparser_val.add_parser("status", help="Satus overview of the validator")
+
 
     #The beacon command arguments
     parser_beacon = subparsers.add_parser("beacon", help="Logs from the beacon node")
