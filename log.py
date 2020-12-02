@@ -343,8 +343,10 @@ def log_beacon(args):
             stream_blocks(args)
         else:
             chainhead = get_chainhead(args.testnet)
-            epoch = int(chainhead['headEpoch'])
-            
+            if args.epoch == -1:
+                epoch = int(chainhead['headEpoch'])
+            else:
+                epoch = args.epoch
             print("   Epoch      Slot  Proposer     Att  Dep Slsh           Graffiti") 
             ret = args.rows
             while ret:
@@ -386,6 +388,8 @@ def main(argv):
         "blocks", help="Information about last few blocks in the beaconchain")
     blocks_parser.add_argument('-s', '--stream', action="store_true",
                                 help="Stream blocks as they are seen (default: False)")
+    blocks_parser.add_argument('-e', '--epoch', type=int, default=-1, 
+                                help="report blocks starting from the given epoch (default: latest head")
 
 
 
