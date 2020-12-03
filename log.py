@@ -17,6 +17,7 @@ import json
 import base64
 from systemd import journal
 from datetime import datetime
+from time import time as Time
 import subprocess, re
 
 ## Adjust these to your need
@@ -39,6 +40,7 @@ beacon_testnet_service = "beacon-chain-goerli.service"
 geth_service = "geth.service"
 geth_testnet_service = "geth-goerli.service"
 
+genesis = 1606824023
 
 def read_status(service):
     p =  subprocess.Popen(["systemctl", "status",  service], stdout=subprocess.PIPE)
@@ -70,6 +72,26 @@ def read_status(service):
 
     return service_status
 
+def balances(j, td=None):
+    bals = {}
+    if not td:
+        j.seek_tail()
+    else:
+        j.seek_realtime(td)
+
+    while True:
+        msg = j.get_previous()
+        if not msg:
+            break
+        pubkey = msg['PUBKEY']
+        if pubkey in bals:
+            break
+        try: 
+            balance = float(msg['NEWBALANCE'])
+        except ValueError:
+            balance = 0
+        bals[pubkey] = balance
+    return bals
 
 def log_validator(args):
     if args.testnet:
@@ -207,20 +229,25 @@ def log_validator(args):
         print("\n")
         print("Number of Epochs running    : {}".format(epochs))
 
-        bals = {}
         j.flush_matches()
-        j.seek_tail()
+        j.add_match(_SYSTEMD_UNIT=service)
         j.add_match(MESSAGE="Previous epoch voting summary")
-        for msg in j:
-            pubkey = msg['PUBKEY']
-            try: 
-                balance = float(msg['NEWBALANCE'])
-            except ValueError:
-                balance = 0
-            bals[pubkey] = max(balance, bals.get(pubkey, 0))
-        print("\n   Public Key            Balance")
-        for pubkey,bal in bals.items():
-            print("{:<20}{:>.9f}".format(pubkey, bal))
+        bals_now = balances(j)
+        td = Time()-3600
+        bals_hour = balances(j, td)
+        td = td - 82800
+        bals_day = balances(j, td)
+        hourly = {pubkey: (bal - bals_hour[pubkey]) * 8760 / bals_hour[pubkey]\
+                   for pubkey, bal in bals_now.items() }
+        daily = {pubkey: (bal - bals_day[pubkey]) * 365 / bals_day[pubkey]\
+                   for pubkey, bal in bals_now.items() }
+        time_fraction = 31536000 / (Time() - genesis)
+        total = {pubkey: (bal - 32) * time_fraction / 32\
+                   for pubkey, bal in bals_now.items() }
+        print("\n   Public Key            Balance     Hourly    Daily     Total")
+        for pubkey,bal in bals_now.items():
+            print("{:<20}{:>.9f}     {:.2%}    {:.2%}    {:.2%}".format(pubkey,
+                            bal, hourly[pubkey], daily[pubkey], total[pubkey] ))
 
 def get_chainhead(testnet):
     #Get chainhead
