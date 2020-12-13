@@ -40,7 +40,8 @@ beacon_testnet_service = "beacon-chain-goerli.service"
 geth_service = "geth.service"
 geth_testnet_service = "geth-goerli.service"
 
-genesis = 1606824023
+genesis_testnet = 1605700807
+genesis_mainnet = 1606824023
 
 def read_status(service):
     p =  subprocess.Popen(["systemctl", "status",  service], stdout=subprocess.PIPE)
@@ -96,18 +97,43 @@ def balances(j, td=None):
 def log_validator(args):
     if args.testnet:
         service = validator_testnet_service
+        genesis = genesis_testnet
     else:
         service = validator_service
+        genesis = genesis_mainnet
 
     j = journal.Reader()
-    j.this_boot()
     j.log_level(journal.LOG_INFO)
     j.add_match(_SYSTEMD_UNIT=service)
+
+    if args.subcommand == "schedule":
+        j.add_match(MESSAGE="Proposal schedule")
+        j.add_match(MESSAGE="Attestation schedule")
+        j.seek_tail()
+        i = 0
+        print("Duty                     Pubkey        Slot     Epoch")
+        while i < args.rows:
+            msg = j.get_previous()
+            if not msg:
+                i += 1
+                continue
+            slot = int(msg['SLOT'])
+            if args.epoch and slot > args.epoch * 32:
+                continue
+            if msg['MESSAGE']=="Attestation schedule":
+                duty = "Attestation" 
+                pubkeys = [k for k in msg['PUBKEYS'][1:-1].split()]
+            else:
+                duty = "Proposal"
+                pubkeys = [msg['PUBKEY'],]
+            for key in pubkeys:
+                print("{:<20} {}   {:<8} {:>6}".format(duty, key, slot, slot // 32))
+            i += 1
 
     if args.subcommand == "proposals":
         j.add_match(MESSAGE="Submitted new block")
         j.seek_tail()
-        print("  Time      Slot     Root         Atts   Deps      Graffiti")
+        print("  Time       Slot       Root            Atts  Deps      Graffiti")
         j.seek_tail()
         i = 0
         while i < args.rows:
@@ -121,11 +147,12 @@ def log_validator(args):
             root = msg['BLOCKROOT']
             atts = msg['NUMATTESTATIONS']
             deps = msg['NUMDEPOSITS']
-            graffiti_temp = base64.b64decode(body["graffiti"])
-            graffiti = graffiti_temp.decode('utf8').replace("\00", " ")
+            #graffiti_temp = base64.b64decode(msg["GRAFFITI"])
+            graffiti = msg['GRAFFITI']
+#            graffiti = graffiti_temp.decode('utf8').replace("\00", " ")
             datetime = msg['_SOURCE_REALTIME_TIMESTAMP']
             time = datetime.strftime("%H:%M:%S")
-            print("{}   {:>7}   {}       {}  {}     {}".format(time, slot, root,
+            print("{}   {:>7}   {}       {}     {}       {}".format(time, slot, root,
                                                         atts, deps, graffiti))
 
             i += 1
@@ -351,7 +378,6 @@ def log_beacon(args):
         service = beacon_service
 
     j = journal.Reader()
-    j.this_boot()
 
     if args.subcommand == "warn":
         j.log_level(journal.LOG_WARNING)
@@ -394,6 +420,9 @@ def log_beacon(args):
         
         print("\nChain Head:\n")
         chainhead = get_chainhead(args.testnet)
+        slot = int(chainhead['headSlot'])
+        slot = "{}   {:>2}/32".format(slot, slot%32)
+        chainhead['headSlot'] = slot
         chainhead['headBlockRoot'] = "0x"+base64.b64decode(chainhead['headBlockRoot']).hex()[:12]
         chainhead['finalizedBlockRoot'] = "0x"+base64.b64decode(chainhead['finalizedBlockRoot']).hex()[:12]
         chainhead['justifiedBlockRoot'] = "0x"+base64.b64decode(chainhead['justifiedBlockRoot']).hex()[:12]
@@ -442,6 +471,10 @@ def main(argv):
     atts_parser = subparser_val.add_parser("attestations", help="Info from submitted attestations")
     atts_parser.add_argument('-e', '--epoch', type=int, default=0, 
                                 help="report attestations starting from the given epoch (default: latest head")
+
+    sched_parser = subparser_val.add_parser("schedule", help="Info about validator duties")
+    sched_parser.add_argument('-e', '--epoch', type=int, default=0, 
+                                help="report duties starting from the given epoch (default: latest head")
 
     performance_parser = subparser_val.add_parser("performance", help="Performance of last few epochs")
     performance_parser.add_argument('-e', '--epoch', type=int, default=0, 
