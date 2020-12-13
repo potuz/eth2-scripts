@@ -1,8 +1,8 @@
-#ETH 2.0 scripts
+# ETH 2.0 scripts
 
 These are some monitoring scripts that are going to be useless for most. But since some expressed interest I am uploading them here. I didn't spend more than a couple of hours with this so take it as such. Eventually I'll actually write them as proper scripts. 
 
-##Usage
+## Usage
 
 You need to run your beacon and validator with `--log-format journald`. You can get help on each command with `-h`
 
