@@ -16,7 +16,7 @@ import requests
 import json
 import base64
 from systemd import journal
-from datetime import datetime
+from datetime import datetime as dt
 from time import time as Time
 import subprocess, re
 
@@ -29,6 +29,7 @@ chainhead_endpoint = "/beacon/chainhead"
 peers_endpoint = "/node/peers"
 blocks_endpoint = "/beacon/blocks"
 stream_blocks_endpoint = "/beacon/blocks/stream"
+participation_endpoint = "/validators/participation"
 testnet_port = "3501"
 mainnet_port = "3500"
 
@@ -95,6 +96,7 @@ def balances(j, td=None):
     return bals
 
 def log_validator(args):
+    today = dt.today().date()
     if args.testnet:
         service = validator_testnet_service
         genesis = genesis_testnet
@@ -133,7 +135,7 @@ def log_validator(args):
     if args.subcommand == "proposals":
         j.add_match(MESSAGE="Submitted new block")
         j.seek_tail()
-        print("  Time       Slot       Root            Atts  Deps      Graffiti")
+        print("  Date        Slot        Pubkey            Root           Atts   Deps      Graffiti")
         j.seek_tail()
         i = 0
         while i < args.rows:
@@ -145,14 +147,19 @@ def log_validator(args):
             if args.epoch and slot > args.epoch * 32:
                 continue
             root = msg['BLOCKROOT']
+            pubkey = msg['PUBKEY']
             atts = msg['NUMATTESTATIONS']
             deps = msg['NUMDEPOSITS']
             #graffiti_temp = base64.b64decode(msg["GRAFFITI"])
             graffiti = msg['GRAFFITI']
 #            graffiti = graffiti_temp.decode('utf8').replace("\00", " ")
             datetime = msg['_SOURCE_REALTIME_TIMESTAMP']
-            time = datetime.strftime("%H:%M:%S")
-            print("{}   {:>7}   {}       {}     {}       {}".format(time, slot, root,
+            if datetime.date() >= today:
+                time = datetime.strftime("%H:%M:%S")
+            else:
+                time = datetime.strftime("%D")
+
+            print("{}   {:>7}    {}   {}       {:>2}     {:>2}       {}".format(time, slot, pubkey, root,
                                                         atts, deps, graffiti))
 
             i += 1
@@ -180,7 +187,10 @@ def log_validator(args):
             sourceroot = msg['SOURCEROOT']
             beaconroot = msg['BEACONBLOCKROOT']
             datetime = msg['_SOURCE_REALTIME_TIMESTAMP']
-            time = datetime.strftime("%H:%M:%S")
+            if datetime.date() >= today:
+                time = datetime.strftime("%H:%M:%S")
+            else:
+                time = datetime.strftime("%D")
             for idx in attidx:
                 if idx in aggidx:
                     print("{} {:>8} {:>8} {:>9} {:>8}   ✓ {:>8}       {}   {}   {}".format(
@@ -195,8 +205,9 @@ def log_validator(args):
     if args.subcommand == "performance":
         j.add_match(MESSAGE="Previous epoch voting summary")
         j.seek_tail() 
-        print("   time      pubkey           epoch    source  target  head   inc. dist.")
+        print("   time      pubkey           epoch    source  target  head   inc. dist.   Balance Chg.")
         i = 0
+        last_epoch = args.epoch
         while i < args.rows:
             msg = j.get_previous()
             if not msg:
@@ -205,6 +216,11 @@ def log_validator(args):
             epoch = int(msg['EPOCH'])
             if args.epoch and epoch > args.epoch:
                 continue
+            if last_epoch and epoch < last_epoch - 1:
+                for lostepoch in range(last_epoch - epoch - 1):
+                    print("{}   {}  {:>8}     {:^5}   {:^5}  {:^5} {:>5}".format(
+                          time, pubkey, last_epoch - lostepoch -1,"⨯" , "⨯", "⨯", "miss"))
+
             inclusion = int(msg['INCLUSIONDISTANCE'])
             if msg['CORRECTLYVOTEDSOURCE'] == "true":
                 source = "✓"
@@ -219,14 +235,21 @@ def log_validator(args):
             else:
                 head = "⨯"
             pubkey = msg['PUBKEY']
+            oldbal = float(msg['OLDBALANCE'])
+            newbal = float(msg['NEWBALANCE'])
+            balchg = int((newbal-oldbal)*10**9)
             datetime = msg['_SOURCE_REALTIME_TIMESTAMP']
-            time = datetime.strftime("%H:%M:%S")
-            if inclusion < 33:
-                print("{}   {}  {:>8}     {:^5}   {:^5}  {:^5} {:>5}".format(
-                      time, pubkey, epoch, source, target, head, inclusion))
+            if datetime.date() >= today:
+                time = datetime.strftime("%H:%M:%S")
             else:
-                print("{}   {}  {:>8}     {:^5}   {:^5}  {:^5} {:>5}".format(
-                      time, pubkey, epoch, source, target, head, "miss"))
+                time = datetime.strftime("%D")
+            if inclusion < 33:
+                print("{}   {}  {:>8}     {:^5}   {:^5}  {:^5} {:>5}       {:>9}".format(
+                      time, pubkey, epoch, source, target, head, inclusion, balchg))
+            else:
+                print("{}   {}  {:>8}     {:^5}   {:^5}  {:^5} {:>5}       {:>9}".format(
+                      time, pubkey, epoch, source, target, head, "miss", balchg))
+            last_epoch = epoch
             i += 1
 
     if args.subcommand == "status":
@@ -264,17 +287,31 @@ def log_validator(args):
         bals_hour = balances(j, td)
         td = td - 82800
         bals_day = balances(j, td)
-        hourly = {pubkey: (bal - bals_hour[pubkey]) * 8760 / bals_hour[pubkey]\
+        td = td - 82800*6
+        bals_week = balances(j, td)
+
+        hourly = {pubkey: (bal - bals_hour.get(pubkey,0)) * 8760 / bals_hour.get(pubkey,10000000000)\
                    for pubkey, bal in bals_now.items() }
-        daily = {pubkey: (bal - bals_day[pubkey]) * 365 / bals_day[pubkey]\
+        daily = {pubkey: (bal - bals_day.get(pubkey,0)) * 365 / bals_day.get(pubkey,1000000000)\
                    for pubkey, bal in bals_now.items() }
+        weekly = {pubkey: (bal - bals_week.get(pubkey,0)) * 365 / 7 / bals_week.get(pubkey,10000000000)\
+                   for pubkey, bal in bals_now.items() }
+
         time_fraction = 31536000 / (Time() - genesis)
-        total = {pubkey: (bal - 32) * time_fraction / 32\
-                   for pubkey, bal in bals_now.items() }
-        print("\n   Public Key            Balance     Hourly    Daily     Total")
+        print("\n   Public Key            Balance     Hourly    Daily     Weekly")
         for pubkey,bal in bals_now.items():
-            print("{:<20}{:>.9f}     {:.2%}    {:.2%}    {:.2%}".format(pubkey,
-                            bal, hourly[pubkey], daily[pubkey], total[pubkey] ))
+            print("{:<20}{:>.9f}     {:6.2%}    {:6.2%}    {:6.2%}".format(pubkey,
+                            bal, hourly[pubkey], daily[pubkey], weekly[pubkey] ))
+
+def get_participation(testnet):
+    if testnet:
+        port = testnet_port
+    else:
+        port = mainnet_port
+    response = requests.get(base_url+port+endpoint_prefix+participation_endpoint)
+    data = response.content.decode()
+    chainhead = json.loads(data)
+    return chainhead['participation']['globalParticipationRate']
 
 def get_chainhead(testnet):
     #Get chainhead
@@ -402,7 +439,10 @@ def log_beacon(args):
             if block:
                 block = "Slot : "+block
             datetime = msg['_SOURCE_REALTIME_TIMESTAMP']
-            time = datetime.strftime("%H:%M:%S")
+            if datetime.date() >= today:
+                time = datetime.strftime("%H:%M:%S")
+            else:
+                time = datetime.strftime("%D")
 
             print("{} -- {} {} {}".format(time, message, errormsg, block))
             return
@@ -417,6 +457,8 @@ def log_beacon(args):
         numpeers = len([1 for m in peers if m['connectionState'] == "CONNECTED"])
         print ("          Peers     : {}".format(numpeers))
         
+        particip = get_participation(args.testnet)
+        print ( "          {:<10}: {:.2%}".format("Particip.", particip))
         
         print("\nChain Head:\n")
         chainhead = get_chainhead(args.testnet)

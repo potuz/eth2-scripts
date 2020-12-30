@@ -20,7 +20,6 @@ genesis = 1606824023
 
 def main(argv):
     j = journal.Reader()
-    j.this_boot()
     j.log_level(journal.LOG_INFO)
     j.add_match(_SYSTEMD_UNIT=beacon_service)
     j.add_match(MESSAGE="Synced new block")
