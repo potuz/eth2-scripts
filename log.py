@@ -104,6 +104,8 @@ def log_validator(args):
         service = validator_service
         genesis = genesis_mainnet
 
+    tg = dt.fromtimestamp(genesis)
+
     j = journal.Reader()
     j.log_level(journal.LOG_INFO)
     j.add_match(_SYSTEMD_UNIT=service)
@@ -167,7 +169,7 @@ def log_validator(args):
     if args.subcommand == "attestations":
         j.add_match(MESSAGE="Submitted new attestations")
         j.seek_tail()
-        print("  time      source   target     slot    index  agr  committee      sourceroot       targetroot       beaconroot")
+        print("  time      source   target     slot    index  agr  committee      sourceroot       targetroot       beaconroot{ts}".format(ts = "      delay" if args.timestamp else ""))
         i = 0
         while i < args.rows:
             msg = j.get_previous()
@@ -187,19 +189,21 @@ def log_validator(args):
             sourceroot = msg['SOURCEROOT']
             beaconroot = msg['BEACONBLOCKROOT']
             datetime = msg['_SOURCE_REALTIME_TIMESTAMP']
+            if args.timestamp:
+                delta = datetime - tg
+                delay = delta.total_seconds() - 12*slot
+                
             if datetime.date() >= today:
                 time = datetime.strftime("%H:%M:%S")
             else:
                 time = datetime.strftime("%D")
+
             for idx in attidx:
-                if idx in aggidx:
-                    print("{} {:>8} {:>8} {:>9} {:>8}   ✓ {:>8}       {}   {}   {}".format(
-                          time, source, target, slot, idx, commitee, sourceroot,
-                          targetroot, beaconroot))
-                else:
-                    print("{} {:>8} {:>8} {:>9} {:>8}     {:>8}       {}   {}   {}".format(
-                          time, source, target, slot, idx, commitee, sourceroot,
-                          targetroot, beaconroot))
+                print("{} {:>8} {:>8} {:>9} {:>8}   {agr} {:>8}       {}   {}   {}{ts}".format(
+                      time, source, target, slot, idx, 
+                      commitee, sourceroot,
+                      targetroot, beaconroot, agr='✓' if idx in aggidx else ' ',
+                      ts="   {:.4f}".format(delay) if args.timestamp else ""))
             i += 1
 
     if args.subcommand == "performance":
@@ -218,6 +222,7 @@ def log_validator(args):
                 continue
             if last_epoch and epoch < last_epoch - 1:
                 for lostepoch in range(last_epoch - epoch - 1):
+                    i += 1
                     print("{}   {}  {:>8}     {:^5}   {:^5}  {:^5} {:>5}".format(
                           time, pubkey, last_epoch - lostepoch -1,"⨯" , "⨯", "⨯", "miss"))
 
@@ -287,14 +292,14 @@ def log_validator(args):
         bals_hour = balances(j, td)
         td = td - 82800
         bals_day = balances(j, td)
-        td = td - 82800*6
+        td = td - 86400*6
         bals_week = balances(j, td)
 
-        hourly = {pubkey: (bal - bals_hour.get(pubkey,0)) * 8760 / bals_hour.get(pubkey,10000000000)\
+        hourly = {pubkey: (bal - bals_hour.get(pubkey,32)) * 8760 / bals_hour.get(pubkey,32)\
                    for pubkey, bal in bals_now.items() }
-        daily = {pubkey: (bal - bals_day.get(pubkey,0)) * 365 / bals_day.get(pubkey,1000000000)\
+        daily = {pubkey: (bal - bals_day.get(pubkey,32)) * 365 / bals_day.get(pubkey,32)\
                    for pubkey, bal in bals_now.items() }
-        weekly = {pubkey: (bal - bals_week.get(pubkey,0)) * 365 / 7 / bals_week.get(pubkey,10000000000)\
+        weekly = {pubkey: (bal - bals_week.get(pubkey,32)) * 365 / 7 / bals_week.get(pubkey,32)\
                    for pubkey, bal in bals_now.items() }
 
         time_fraction = 31536000 / (Time() - genesis)
@@ -302,6 +307,13 @@ def log_validator(args):
         for pubkey,bal in bals_now.items():
             print("{:<20}{:>.9f}     {:6.2%}    {:6.2%}    {:6.2%}".format(pubkey,
                             bal, hourly[pubkey], daily[pubkey], weekly[pubkey] ))
+    
+        total = sum([val for (key,val) in bals_now.items()])
+        total_hour = sum([ int((bal - bals_hour.get(pubkey,32))*1000000000) for pubkey, bal in bals_now.items()])
+        total_day = sum([ bal - bals_day.get(pubkey,32) for pubkey,bal in bals_now.items()])
+        total_week = sum([ bal - bals_week.get(pubkey,32) for pubkey,bal in bals_now.items()])
+        print("{:<20}{:>.9f}     {:>}    {:>.4f}    {:>.4f}".format("Totals",
+                            total, total_hour, total_day, total_week ))
 
 def get_participation(testnet):
     if testnet:
@@ -361,7 +373,7 @@ def print_block(container, prev, down):
             prev += 1
             print("{:<6} {:>8}  \033[93mMISSING\033[0m".format(prev // 32, prev))
 
-    print("{:<6} {:>8}  {:>6}     {:>3}  {:>4}  {:>1}/{:<1}  {:>4}    {:<32}   0x{:<9}...".format(epoch, slot, proposer,
+    print("{:<6} {:>8}  {:>6}     {:>3}  {:>4}  {:>1}/{:<1}  {:>4}    {:<32}   0x{:<9}".format(epoch, slot, proposer,
                                                 attestations, deposits,
                                                 proposerSlashings,
                                                 attesterSlashings,
@@ -409,6 +421,7 @@ def stream_blocks(args):
             slot = print_block(block, slot, False)
      
 def log_beacon(args):
+    today = dt.today().date()
     if args.testnet:
         service = beacon_testnet_service
     else:
@@ -513,6 +526,8 @@ def main(argv):
     atts_parser = subparser_val.add_parser("attestations", help="Info from submitted attestations")
     atts_parser.add_argument('-e', '--epoch', type=int, default=0, 
                                 help="report attestations starting from the given epoch (default: latest head")
+    atts_parser.add_argument('-T', '--timestamp', action="store_true", 
+                                help="report timestamps for the given attestation (default: False")
 
     sched_parser = subparser_val.add_parser("schedule", help="Info about validator duties")
     sched_parser.add_argument('-e', '--epoch', type=int, default=0, 
